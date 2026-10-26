@@ -1,8 +1,20 @@
 import { generateCopyForProduct } from "@/server/generation/service";
 
-export async function POST(_request: Request, { params }: RouteContext<"/api/products/[id]/generate">) {
+/**
+ * Must stay above the retry policy's total budget (45s) and below the hosting
+ * plan's function limit, or the platform kills the handler mid-retry and the
+ * browser sees a dropped connection instead of the real error.
+ */
+export const maxDuration = 60;
+
+export async function POST(
+  request: Request,
+  { params }: RouteContext<"/api/products/[id]/generate">,
+) {
   const { id } = await params;
-  const outcome = await generateCopyForProduct(id);
+  // A closed tab aborts this signal, which cancels the in-flight model call
+  // instead of paying for tokens nobody will read.
+  const outcome = await generateCopyForProduct(id, { signal: request.signal });
 
   if (outcome.ok) {
     return Response.json({ generationId: outcome.generationId }, { status: 201 });
@@ -12,11 +24,34 @@ export async function POST(_request: Request, { params }: RouteContext<"/api/pro
     return Response.json({ error: "product_not_found" }, { status: 404 });
   }
 
-  // 502: the request was valid, the upstream model call is what failed. The
-  // failure is already persisted on the generation row, so the id is returned
-  // and the UI can show what went wrong.
+  const headers = new Headers();
+  if (outcome.retryAfterSeconds !== null) {
+    headers.set("retry-after", String(outcome.retryAfterSeconds));
+  }
+
   return Response.json(
-    { error: outcome.code, generationId: outcome.generationId },
-    { status: 502 },
+    {
+      error: outcome.code,
+      retryable: outcome.retryable,
+      generationId: outcome.generationId,
+    },
+    { status: STATUS_BY_CODE[outcome.code] ?? 502, headers },
   );
 }
+
+/**
+ * The failure is reported with the status that describes who has to act: 422
+ * when the request will never succeed as written, 429/503 when the caller
+ * should come back later, 502 when the upstream provider is at fault.
+ */
+const STATUS_BY_CODE: Record<string, number> = {
+  refusal: 422,
+  truncated: 422,
+  invalid_output: 422,
+  rate_limited: 429,
+  overloaded: 503,
+  timeout: 504,
+  network_error: 502,
+  api_error: 502,
+  aborted: 499,
+};

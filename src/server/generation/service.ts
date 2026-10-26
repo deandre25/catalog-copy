@@ -5,9 +5,19 @@ import { db } from "@/server/db";
 export type GenerateOutcome =
   | { ok: true; generationId: string }
   | { ok: false; reason: "product_not_found" }
-  | { ok: false; reason: "generation_failed"; code: LlmFailureCode | "unknown"; generationId: string };
+  | {
+      ok: false;
+      reason: "generation_failed";
+      code: LlmFailureCode | "unknown";
+      retryable: boolean;
+      retryAfterSeconds: number | null;
+      generationId: string;
+    };
 
-export async function generateCopyForProduct(productId: string): Promise<GenerateOutcome> {
+export async function generateCopyForProduct(
+  productId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<GenerateOutcome> {
   const product = await db.product.findUnique({
     where: { id: productId },
     select: { rawInput: true },
@@ -25,7 +35,7 @@ export async function generateCopyForProduct(productId: string): Promise<Generat
   });
 
   try {
-    const copy = await generateStructuredCopy(product.rawInput);
+    const copy = await generateStructuredCopy(product.rawInput, { signal: options.signal });
 
     await db.generation.update({
       where: { id: generation.id },
@@ -40,18 +50,27 @@ export async function generateCopyForProduct(productId: string): Promise<Generat
 
     return { ok: true, generationId: generation.id };
   } catch (error) {
-    const code = error instanceof LlmError ? error.code : "unknown";
+    const failure = error instanceof LlmError ? error : null;
 
     await db.generation.update({
       where: { id: generation.id },
       data: {
-        status: "FAILED",
-        errorCode: code,
+        // An aborted generation is not a failure of the system: the user
+        // changed their mind, and the row should read that way in the history.
+        status: failure?.code === "aborted" ? "CANCELLED" : "FAILED",
+        errorCode: failure?.code ?? "unknown",
         errorMessage: error instanceof Error ? error.message : String(error),
         completedAt: new Date(),
       },
     });
 
-    return { ok: false, reason: "generation_failed", code, generationId: generation.id };
+    return {
+      ok: false,
+      reason: "generation_failed",
+      code: failure?.code ?? "unknown",
+      retryable: failure?.retryable ?? false,
+      retryAfterSeconds: failure?.retryAfterSeconds ?? null,
+      generationId: generation.id,
+    };
   }
 }
