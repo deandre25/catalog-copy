@@ -141,7 +141,13 @@ async function embedQuery(query: string): Promise<{ vector: number[]; cached: bo
     input: query,
   });
 
-  const startedAt = Date.now();
+  // performance.now(), not Date.now(). This runs inside a Suspense boundary
+  // that Next prerenders until the first dynamic data access, and the wall
+  // clock is an unstable value there: reading it before the cache query made
+  // the prerender throw, the dynamic half of /search never resumed, and a
+  // visitor got a page frozen on "Searching…" about half the time. A monotonic
+  // timer is also the right tool for measuring an elapsed duration.
+  const startedAt = performance.now();
   const cached = await readCache(key);
 
   if (cached !== null) {
@@ -152,7 +158,7 @@ async function embedQuery(query: string): Promise<{ vector: number[]; cached: bo
         task: QUERY_TASK,
         model: MODELS.embedding,
         promptVersion: EMBEDDING_INPUT_VERSION,
-        latencyMs: Date.now() - startedAt,
+        latencyMs: Math.round(performance.now() - startedAt),
       });
 
       return { vector: parsed.data, cached: true };
