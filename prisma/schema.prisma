@@ -33,6 +33,7 @@ model Product {
   updatedAt DateTime @updatedAt
 
   generations Generation[]
+  embedding   ProductEmbedding?
 
   @@index([inputHash])
   @@index([createdAt(sort: Desc)])
@@ -123,4 +124,36 @@ model LlmCache {
   lastHitAt DateTime @default(now())
 
   @@index([createdAt(sort: Desc)])
+}
+
+/// One vector per product, built from its latest complete copy.
+///
+/// Keyed by productId rather than versioned: semantic search answers "which
+/// other products are like this one", and keeping a vector per generation
+/// would return the same product several times, some rows pointing at copy
+/// that has since been rewritten.
+model ProductEmbedding {
+  productId String  @id
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// The generation the text came from, so a search hit can be traced back to
+  /// the exact copy that produced it.
+  generationId String
+
+  model String
+  /// sha256 of the exact text that was embedded. Re-embedding unchanged text
+  /// is skipped rather than paid for — the same idea as the response cache,
+  /// but the vector has to stay in its own table to be queryable.
+  sourceHash String
+  /// The embedded text is stored next to the vector. A result list has to show
+  /// what it matched, and the alternative is a second query per hit.
+  content String @db.Text
+  tokens  Int
+
+  /// Prisma has no vector type, so the column is declared as Unsupported: it
+  /// is created by the migration and read and written through $queryRaw.
+  embedding Unsupported("vector(1024)")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
