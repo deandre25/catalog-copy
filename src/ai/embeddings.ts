@@ -80,10 +80,15 @@ export async function embed(
     inputType,
     signal,
     onCall,
+    // A bulk pass overrides this. The default is sized for a visitor waiting
+    // on a page; waiting out a per-minute quota is not something to do while
+    // someone watches a spinner.
+    policy = EMBEDDING_RETRY_POLICY,
   }: {
     inputType: EmbeddingInputType;
     signal?: AbortSignal;
     onCall?: (call: CallTelemetry) => void;
+    policy?: RetryPolicy;
   },
 ): Promise<EmbeddingResult> {
   if (texts.length === 0) return { vectors: [], tokens: 0 };
@@ -148,7 +153,7 @@ export async function embed(
       };
     },
     {
-      policy: EMBEDDING_RETRY_POLICY,
+      policy,
       signal,
       onAttempt: (report) => {
         if (report.outcome === "success") {

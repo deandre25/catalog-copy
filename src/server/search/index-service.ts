@@ -1,5 +1,6 @@
 import { EMBEDDING_INPUT_VERSION, embed, toVectorLiteral } from "@/ai/embeddings";
 import { MODELS } from "@/ai/models";
+import { sleep, type RetryPolicy } from "@/ai/retry";
 import type { CallTelemetry } from "@/ai/telemetry";
 import { normalizeInput, sha256 } from "@/lib/hash";
 import { db } from "@/server/db";
@@ -150,15 +151,65 @@ export async function indexGeneration(
 }
 
 /**
- * Batch size for a bulk pass.
+ * A batch is bounded by tokens, not by item count.
  *
- * Voyage accepts up to 1,000 texts and 1M tokens in one request, so 64 entries
- * of ~400 tokens is nowhere near either ceiling. The limit that actually binds
- * is the account's requests-per-minute: embedding 50 products one at a time is
- * 50 requests against a quota measured in requests, and on a free tier that is
- * 50 rate-limit errors. Batched, the same work is one request.
+ * Voyage's hard ceiling is 1,000 texts and 1M tokens per request, so counting
+ * items looks sufficient — and is not. The quota that binds a real account is
+ * measured in tokens per minute, and the first version of this batched 37
+ * products of ~400 tokens into one request, sailed past the item limit and hit
+ * a 10,000 TPM wall. Batching only helps when it is batched along the axis the
+ * quota is measured on.
+ *
+ * Sized for the free tier. An account with standard limits can raise both of
+ * these by two orders of magnitude.
  */
-const BATCH_SIZE = 64;
+const BATCH_TOKEN_BUDGET = 7_000;
+
+/** Three requests per minute on the free tier, so one every 21 seconds. */
+const BATCH_PACING_MS = 21_000;
+
+/**
+ * A rate limit measured per minute cannot be retried inside a 20-second
+ * budget: every attempt lands in the same window that rejected the first one.
+ * The retry budget has to outlast the provider's quota window or the retry is
+ * decoration. This is the one place in the project that waits minutes, and it
+ * is a background pass with nobody watching.
+ */
+const BULK_RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 5,
+  baseDelayMs: 8_000,
+  maxDelayMs: 60_000,
+  perAttemptTimeoutMs: 60_000,
+  totalBudgetMs: 5 * 60_000,
+};
+
+/** Four characters per token is close enough to size a batch. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function intoBatches(pending: readonly Pending[]): Pending[][] {
+  const batches: Pending[][] = [];
+  let batch: Pending[] = [];
+  let tokens = 0;
+
+  for (const entry of pending) {
+    const cost = estimateTokens(entry.content);
+
+    if (batch.length > 0 && tokens + cost > BATCH_TOKEN_BUDGET) {
+      batches.push(batch);
+      batch = [];
+      tokens = 0;
+    }
+
+    batch.push(entry);
+    tokens += cost;
+  }
+
+  if (batch.length > 0) batches.push(batch);
+
+  return batches;
+}
 
 type Pending = {
   productId: string;
@@ -221,14 +272,20 @@ export async function reindexCatalog({ limit = 200 }: { limit?: number } = {}): 
     pending.push({ productId: product.id, generationId: generation.id, content, sourceHash });
   }
 
-  for (let start = 0; start < pending.length; start += BATCH_SIZE) {
-    const batch = pending.slice(start, start + BATCH_SIZE);
+  const batches = intoBatches(pending);
+
+  for (const [index, batch] of batches.entries()) {
+    // Paced rather than fired back to back: the retry policy can absorb a 429,
+    // but spending the quota and then waiting it out is slower than not
+    // spending it.
+    if (index > 0) await sleep(BATCH_PACING_MS);
+
     const calls: CallTelemetry[] = [];
 
     try {
       const { vectors, tokens } = await embed(
         batch.map((entry) => entry.content),
-        { inputType: "document", onCall: (call) => calls.push(call) },
+        { inputType: "document", policy: BULK_RETRY_POLICY, onCall: (call) => calls.push(call) },
       );
 
       // One request produced one token count for the whole batch, so the
