@@ -36,7 +36,16 @@ export async function getProduct(id: string) {
       createdAt: true,
       generations: {
         orderBy: { createdAt: "desc" },
-        select: { id: true, status: true, seoTitle: true, createdAt: true },
+        select: {
+          id: true,
+          status: true,
+          seoTitle: true,
+          metaDescription: true,
+          benefits: true,
+          errorCode: true,
+          errorMessage: true,
+          createdAt: true,
+        },
       },
     },
   });
