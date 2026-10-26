@@ -3,7 +3,9 @@ import { Suspense } from "react";
 
 import { DescriptionStream } from "@/components/description-stream";
 import { GenerateButton } from "@/components/generate-button";
+import { HitList } from "@/components/hit-list";
 import { getProduct } from "@/server/products/service";
+import { similarProducts } from "@/server/search/service";
 
 type Params = PageProps<"/products/[id]">["params"];
 
@@ -15,6 +17,23 @@ export default function ProductPage({ params }: PageProps<"/products/[id]">) {
     <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
       <ProductDetail params={params} />
     </Suspense>
+  );
+}
+
+/**
+ * Free to render: the product's own vector is already stored, so this is a
+ * database query and not a provider call.
+ */
+async function SimilarProducts({ productId }: { productId: string }) {
+  const hits = await similarProducts(productId);
+
+  if (hits.length === 0) return null;
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Similar products</h2>
+      <HitList hits={hits} />
+    </section>
   );
 }
 
@@ -36,6 +55,12 @@ async function ProductDetail({ params }: { params: Params }) {
       <GenerateButton productId={product.id} />
 
       {latest ? <GenerationCard generation={latest} interactive /> : null}
+
+      {/* Its own boundary: a nearest-neighbour query is not needed to render
+          the copy, so it must not hold the rest of the page back. */}
+      <Suspense fallback={null}>
+        <SimilarProducts productId={product.id} />
+      </Suspense>
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Raw specs</h2>

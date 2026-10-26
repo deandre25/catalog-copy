@@ -18,6 +18,7 @@ caching, cost accounting, prompt-injection defences, RAG) land in stage 8.
 | Validation | Zod 4 |
 | Styling | Tailwind CSS 4 |
 | Models | Anthropic `claude-haiku-5-5` / `claude-sonnet-5-5` |
+| Embeddings | Voyage `voyage-4-lite`, 1024 dimensions |
 
 ## Local setup
 
@@ -57,3 +58,6 @@ The app runs on http://localhost:3000.
   `GROUP BY` over this table.
 - **LlmCache** — response cache keyed by `task | model | promptVersion |
   normalizedInput`, so editing a prompt invalidates it implicitly.
+- **ProductEmbedding** — one `vector(1024)` per product, built from its latest
+  complete copy and indexed with HNSW over cosine distance. Written and read
+  through raw SQL: Prisma has no vector type.
