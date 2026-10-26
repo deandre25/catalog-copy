@@ -12,7 +12,7 @@ retries that know which errors not to retry, a response cache, a cost ledger,
 prompt-injection defences, and retrieval over pgvector — each one is
 implemented, and each one is explained below including where it falls short.
 
-**Live demo:** _not deployed yet — see [Status](#status)._
+**Live demo:** _not deployed yet — see [Status](#status) for measured costs from the live run._
 
 ## Architecture
 
@@ -326,16 +326,36 @@ retry budget so a handler outlives its own worst case.
 
 ## Status
 
-Everything described above is implemented, type-checks, lints and builds. Two
-things are outstanding, and both need credentials rather than code:
+All seven concerns have been exercised against the live providers. Measured on
+2026-10-26, three products end to end:
 
-- **No live model call has run.** There is no `ANTHROPIC_API_KEY` or
-  `VOYAGE_API_KEY` on the machine this was written on. Everything verifiable
-  without one was verified against the real code paths: the schema
-  transformation `zodOutputFormat` performs, retry and classification behaviour
-  against synthesized SDK errors, SSE frame reassembly under adversarial
-  chunking, sanitisation against six attack payloads, the stats page against
-  seeded ledger rows, and vector search against seeded embeddings with the
-  query vector planted in the cache. Output quality and provider latency are
-  not verified.
-- **Not deployed, no screenshots.** Both follow from the same blocker.
+| | |
+|---|---|
+| Structured copy (Haiku) | 1,121 in / 2,119 out tokens, **$0.0012**, 10.3s |
+| Description (Sonnet) | 776 in / 451 out tokens, **$0.0061**, 5.0s |
+| Embedding (voyage-4-lite) | 423 tokens, **$0.000008**, 0.8s |
+| **Per product, cold** | **~$0.0073** |
+| Same description from cache | **$0**, 160ms instead of 5.0s |
+
+Behaviour, not just cost:
+
+- **Structured output** came back inside every bound without a repair turn —
+  a 52-character title (limit 70), a 108-character meta description (70-160)
+  and five benefits.
+- **Cancellation**: killing the client 3s into a stream left 157 words stored
+  with `descriptionPartial: true`, status `CANCELLED`, and nothing cached.
+- **Injection**: a supplier feed carrying a fake `</product_specs>`, a
+  `System:` turn, a competitor domain, an `<a href>` and an email produced
+  clean copy from the real specs only — and five signals flagged for review.
+  The output filter had nothing to strip, which is the first layer holding.
+- **RAG**: "quiet machine for a small flat" — words that appear in none of the
+  copy — ranked the washing machine 0.409, the dishwasher 0.353 and a garden
+  hose 0.047. A repeat of the same query served the vector from cache.
+- The live run found one real bug: an aborted stream was billed as $0, because
+  usage was only read from `finalMessage()`, which a broken stream never
+  produces. Usage is now accumulated from the stream events, so a cancelled
+  generation reports the tokens the provider actually charged for. The output
+  count on an abort is a floor rather than an exact figure, and that is
+  documented where it is recorded.
+
+Outstanding: **not deployed**, and no screenshots in this README yet.
