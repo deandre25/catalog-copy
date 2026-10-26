@@ -1,4 +1,4 @@
-import { costMicroUsd } from "@/ai/cost";
+import { costNanoUsd } from "@/ai/cost";
 import type { CallTelemetry } from "@/ai/telemetry";
 import { db } from "@/server/db";
 
@@ -19,7 +19,7 @@ export async function recordCalls(
       cacheHit: false,
       inputTokens: call.inputTokens,
       outputTokens: call.outputTokens,
-      costMicroUsd: costMicroUsd(call.model, call.inputTokens, call.outputTokens),
+      costNanoUsd: BigInt(costNanoUsd(call.model, call.inputTokens, call.outputTokens)),
       latencyMs: call.latencyMs,
       errorCode: call.errorCode,
     })),

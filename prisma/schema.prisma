@@ -98,9 +98,14 @@ model LlmCall {
   cacheReadTokens  Int @default(0)
   cacheWriteTokens Int @default(0)
 
-  /// Integer micro-dollars (1 = $0.000001). Avoids float drift on SUM and
-  /// avoids leaking Decimal objects through the whole codebase.
-  costMicroUsd Int @default(0)
+  /// Integer nano-dollars (1 = $0.000000001), as a bigint.
+  ///
+  /// Micro-dollars came first and were too coarse: a 10-token embedding query
+  /// costs 0.2 of one, so every such row rounded to zero and the ledger
+  /// reported a quarter of its traffic as free. Integers are still the point —
+  /// SUM over a float column drifts — the unit just had to match the cheapest
+  /// call, not the most expensive one.
+  costNanoUsd BigInt @default(0)
   latencyMs    Int
 
   errorCode String?

@@ -16,21 +16,25 @@ export default function StatsPage() {
 
 async function Stats() {
   const stats = await getUsageStats();
-  const maxDailyCost = Math.max(1, ...stats.byDay.map((day) => day.costMicroUsd));
+  const maxDailyCost = Math.max(1, ...stats.byDay.map((day) => day.costNanoUsd));
 
   return (
     <div className="space-y-10">
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Tile label="Spent, last 24h" value={formatUsd(stats.lastDay.costMicroUsd)} />
-        <Tile label="Billed calls, 24h" value={String(stats.lastDay.calls)} />
+        <Tile label="Spent, last 24h" value={formatUsd(stats.lastDay.costNanoUsd)} />
+        <Tile
+          label="Billed calls, 24h"
+          value={String(stats.lastDay.calls)}
+          hint={`${stats.lastDay.modelCalls} to Claude · ${stats.lastDay.embeddingCalls} embeddings`}
+        />
         <Tile
           label="Avg per generation"
-          value={formatUsd(stats.allTime.costPerGenerationMicroUsd)}
+          value={formatUsd(stats.allTime.costPerGenerationNanoUsd)}
           hint={`${stats.allTime.completedGenerations} completed`}
         />
         <Tile
           label="Saved by cache"
-          value={formatUsd(stats.allTime.savedMicroUsd)}
+          value={formatUsd(stats.allTime.savedNanoUsd)}
           hint={`${stats.allTime.cacheHits} hits · estimated`}
         />
       </section>
@@ -45,11 +49,11 @@ async function Stats() {
               </span>
               <span className="w-14 shrink-0 text-right tabular-nums">{day.calls}</span>
               <span className="w-20 shrink-0 text-right tabular-nums">
-                {formatUsd(day.costMicroUsd)}
+                {formatUsd(day.costNanoUsd)}
               </span>
               <span
                 className="h-2 rounded-sm bg-zinc-300 dark:bg-zinc-700"
-                style={{ width: `${(day.costMicroUsd / maxDailyCost) * 100}%` }}
+                style={{ width: `${(day.costNanoUsd / maxDailyCost) * 100}%` }}
               />
             </li>
           ))}
@@ -75,7 +79,7 @@ async function Stats() {
                 <td className="py-2 text-right tabular-nums">{row.calls}</td>
                 <td className="py-2 text-right tabular-nums">{row.inputTokens.toLocaleString("en-GB")}</td>
                 <td className="py-2 text-right tabular-nums">{row.outputTokens.toLocaleString("en-GB")}</td>
-                <td className="py-2 text-right tabular-nums">{formatUsd(row.costMicroUsd)}</td>
+                <td className="py-2 text-right tabular-nums">{formatUsd(row.costNanoUsd)}</td>
               </tr>
             ))}
             {stats.byModel.length === 0 ? (
