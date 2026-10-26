@@ -70,8 +70,31 @@ export async function* streamDescription(
     // is what the finally block has to know.
     let settled = false;
 
+    /**
+     * Accumulated from the stream rather than read from finalMessage.
+     *
+     * An aborted or broken stream never produces a final message, but the
+     * provider has already generated — and billed — whatever arrived before it
+     * broke. Reading usage only on success made the ledger report a cancelled
+     * generation as free, which understates spend in exactly the case this
+     * project treats as a feature.
+     */
+    let usage: Anthropic.Usage | null = null;
+
     try {
       for await (const event of stream) {
+        if (event.type === "message_start") {
+          usage = event.message.usage;
+          continue;
+        }
+
+        if (event.type === "message_delta") {
+          // output_tokens on a message_delta is the running total, not an
+          // increment, so it replaces rather than adds.
+          if (usage) usage = { ...usage, output_tokens: event.usage.output_tokens };
+          continue;
+        }
+
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
           text += event.delta.text;
           yield { type: "delta", text: event.delta.text };
@@ -129,13 +152,20 @@ export async function* streamDescription(
           : null;
 
       if (delayMs === null || delayMs >= budgetLeftMs) {
-        onCall?.(telemetry(attempt, "FAILED", null, latencyMs, failure.code));
+        // The counts are the last ones the provider sent. message_delta
+        // carries the running output total only near the end of a response,
+        // so on an abort this is a floor, not the exact figure — measured 772
+        // input and 8 output tokens for a cancellation that had produced about
+        // 200. It is recorded as measured rather than topped up with an
+        // estimate: a ledger that mixes the two cannot be reconciled against
+        // an invoice. Zero was simply wrong.
+        onCall?.(telemetry(attempt, "FAILED", usage, latencyMs, failure.code));
         settled = true;
         yield { type: "failed", code: failure.code, message: failure.message, partial: text };
         return;
       }
 
-      onCall?.(telemetry(attempt, "RETRIED", null, latencyMs, failure.code));
+      onCall?.(telemetry(attempt, "RETRIED", usage, latencyMs, failure.code));
       await sleep(delayMs, signal);
     } finally {
       // Only for the torn-down case: the consumer broke out of its for-await,
