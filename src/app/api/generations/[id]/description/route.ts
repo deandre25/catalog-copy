@@ -1,6 +1,10 @@
 import { writeDescription } from "@/server/generation/description-service";
 
-export const maxDuration = 120;
+// 60s rather than higher: it is above the 45s retry budget the stream runs on,
+// so the handler outlives its own worst case, and it is inside the ceiling the
+// cheapest Vercel plan allows — a declared duration above the plan limit fails
+// the deployment rather than degrading.
+export const maxDuration = 60;
 
 export async function POST(
   request: Request,
