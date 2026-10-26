@@ -235,7 +235,12 @@ async function httpError(response: Response): Promise<LlmError> {
     })
     .catch(() => response.statusText);
 
-  const retryAfter = Number(response.headers.get("retry-after"));
+  // Number(null) is 0, so reading the header straight into Number turns "no
+  // retry-after sent" into "retry immediately" — which collapses the backoff
+  // curve to nothing and spends all three attempts inside a second. Voyage
+  // documents no retry-after at all, so this is its normal path.
+  const retryAfterHeader = response.headers.get("retry-after");
+  const retryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
 
   return new LlmError(
     response.status === 429 ? "rate_limited" : "api_error",
