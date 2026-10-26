@@ -86,6 +86,19 @@ function GenerationCard({
         </span>
       </header>
 
+      {generation.warnings.length > 0 ? (
+        <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
+          <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+            Needs review — {generation.warnings.length} signal(s)
+          </p>
+          <ul className="font-mono text-xs text-amber-700 dark:text-amber-400">
+            {generation.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {isFailed ? (
         <div className="space-y-1">
           <p className="text-sm font-medium">{generation.errorCode}</p>

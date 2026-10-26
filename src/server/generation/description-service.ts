@@ -1,6 +1,7 @@
 import { buildCacheKey } from "@/ai/cache-key";
 import { MODELS } from "@/ai/models";
 import { DESCRIPTION_PROMPT_VERSION } from "@/ai/prompts/description";
+import { createStreamSanitizer, detectInjectionSignals, sanitizeCopyText, sanitizeSpecs } from "@/ai/sanitize";
 import { streamDescription } from "@/ai/stream-description";
 import type { CallTelemetry } from "@/ai/telemetry";
 import { db } from "@/server/db";
@@ -37,6 +38,7 @@ export async function* writeDescription(
     select: {
       seoTitle: true,
       benefits: true,
+      warnings: true,
       product: { select: { rawInput: true } },
     },
   });
@@ -55,8 +57,10 @@ export async function* writeDescription(
     return;
   }
 
+  const specs = sanitizeSpecs(generation.product.rawInput);
+
   const input = {
-    rawSpecs: generation.product.rawInput,
+    rawSpecs: specs.text,
     seoTitle: generation.seoTitle,
     benefits: generation.benefits,
   };
@@ -110,10 +114,22 @@ export async function* writeDescription(
   }
 
   const calls: CallTelemetry[] = [];
+  const sanitizer = createStreamSanitizer();
+  const injectionSignals = detectInjectionSignals(generation.product.rawInput);
+  const strippedFromOutput = new Set<string>();
+
   let text = "";
   let flushedLength = 0;
   let lastFlushAt = Date.now();
   let finalized = false;
+
+  const warnings = () => [
+    ...new Set([
+      ...generation.warnings,
+      ...injectionSignals,
+      ...[...strippedFromOutput].map((label) => `output:${label}`),
+    ]),
+  ];
 
   const flush = async () => {
     if (text.length === flushedLength) return;
@@ -126,46 +142,62 @@ export async function* writeDescription(
   };
 
   try {
-    const stream = streamDescription(
-      {
-        rawSpecs: generation.product.rawInput,
-        seoTitle: generation.seoTitle,
-        benefits: generation.benefits,
-      },
-      { signal, onCall: (call) => calls.push(call) },
-    );
+    const stream = streamDescription(input, { signal, onCall: (call) => calls.push(call) });
 
     for await (const event of stream) {
       if (event.type === "delta") {
-        text += event.text;
+        // Sanitised before it leaves the server, so a payload never reaches the
+        // browser even for the moment it is being typed out. The sanitiser
+        // holds back any fragment that could still turn into a URL or a tag.
+        const clean = sanitizer.push(event.text);
+        for (const label of clean.removed) strippedFromOutput.add(label);
 
-        if (Date.now() - lastFlushAt >= FLUSH_INTERVAL_MS || text.length - flushedLength >= FLUSH_CHARS) {
-          await flush();
+        if (clean.text.length > 0) {
+          text += clean.text;
+
+          if (Date.now() - lastFlushAt >= FLUSH_INTERVAL_MS || text.length - flushedLength >= FLUSH_CHARS) {
+            await flush();
+          }
+
+          yield { type: "delta", text: clean.text };
         }
 
-        yield { type: "delta", text: event.text };
         continue;
+      }
+
+      const tail = sanitizer.flush();
+      for (const label of tail.removed) strippedFromOutput.add(label);
+      if (tail.text.length > 0) {
+        text += tail.text;
+        yield { type: "delta", text: tail.text };
       }
 
       finalized = true;
 
       if (event.type === "done") {
-        // Only a complete description is cached. Caching partial or refused
-        // output would serve the same broken text forever, for free, which is
-        // worse than paying again.
+        // Stored from a single pass over the complete text rather than from the
+        // concatenated chunks: whitespace collapsing across a chunk boundary
+        // can differ by a space, and the stored copy is the canonical one.
+        const final = sanitizeCopyText(event.description);
+        for (const label of final.removed) strippedFromOutput.add(label);
+
+        // Only complete output is cached. Caching partial or refused text would
+        // serve the same broken result forever, for free, which is worse than
+        // paying again.
         await writeCache({
           key: cacheKey,
           task: TASK,
           model: MODELS.description,
-          response: event.description,
+          response: final.text,
         });
 
         await db.generation.update({
           where: { id: generationId },
           data: {
             status: "COMPLETED",
-            description: event.description,
+            description: final.text,
             descriptionPartial: false,
+            warnings: warnings(),
             completedAt: new Date(),
           },
         });
@@ -181,10 +213,11 @@ export async function* writeDescription(
         where: { id: generationId },
         data: {
           status: event.code === "aborted" ? "CANCELLED" : "FAILED",
-          description: event.partial.length > 0 ? event.partial : null,
-          descriptionPartial: event.partial.length > 0,
+          description: text.length > 0 ? text : null,
+          descriptionPartial: text.length > 0,
           errorCode: event.code,
           errorMessage: event.message,
+          warnings: warnings(),
           completedAt: new Date(),
         },
       });
@@ -201,14 +234,18 @@ export async function* writeDescription(
     // had arrived. A dropped connection and a closed tab are indistinguishable
     // from here, so both are recorded as cancelled.
     if (!finalized) {
+      const tail = sanitizer.flush();
+      const partial = text + tail.text;
+
       await db.generation.update({
         where: { id: generationId },
         data: {
           status: "CANCELLED",
-          description: text.length > 0 ? text : null,
-          descriptionPartial: text.length > 0,
+          description: partial.length > 0 ? partial : null,
+          descriptionPartial: partial.length > 0,
           errorCode: "aborted",
           errorMessage: "Client disconnected before the stream finished",
+          warnings: warnings(),
           completedAt: new Date(),
         },
       });

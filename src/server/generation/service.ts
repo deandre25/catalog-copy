@@ -3,7 +3,8 @@ import { LlmError, type LlmFailureCode } from "@/ai/errors";
 import { generateStructuredCopy } from "@/ai/generate-structured";
 import { MODELS } from "@/ai/models";
 import { STRUCTURED_PROMPT_VERSION } from "@/ai/prompts/structured";
-import { structuredCopySchema } from "@/ai/schemas";
+import { detectInjectionSignals, sanitizeCopyText, sanitizeSpecs } from "@/ai/sanitize";
+import { structuredCopySchema, type StructuredCopy } from "@/ai/schemas";
 import type { CallTelemetry } from "@/ai/telemetry";
 import { db } from "@/server/db";
 
@@ -44,11 +45,19 @@ export async function generateCopyForProduct(
     select: { id: true },
   });
 
+  // Invisible characters are stripped and the fence tag neutralised before the
+  // text reaches the prompt. Signals are recorded, not acted on: a pattern list
+  // cannot decide this, only point a reviewer at it.
+  const specs = sanitizeSpecs(product.rawInput);
+  const warnings = detectInjectionSignals(product.rawInput);
+
   const cacheKey = buildCacheKey({
     task: TASK,
     model: MODELS.structured,
     promptVersion: STRUCTURED_PROMPT_VERSION,
-    input: product.rawInput,
+    // Keyed on the sanitised text, since that is what actually reaches the
+    // model and therefore what determines the output.
+    input: specs.text,
   });
 
   const cacheStartedAt = Date.now();
@@ -62,13 +71,16 @@ export async function generateCopyForProduct(
     const parsed = structuredCopySchema.safeParse(cached);
 
     if (parsed.success) {
+      const clean = sanitizeCopy(parsed.data);
+
       await db.generation.update({
         where: { id: generation.id },
         data: {
           status: "COMPLETED",
-          seoTitle: parsed.data.seoTitle,
-          metaDescription: parsed.data.metaDescription,
-          benefits: parsed.data.benefits,
+          seoTitle: clean.copy.seoTitle,
+          metaDescription: clean.copy.metaDescription,
+          benefits: clean.copy.benefits,
+          warnings: [...warnings, ...clean.removed],
           completedAt: new Date(),
         },
       });
@@ -89,25 +101,30 @@ export async function generateCopyForProduct(
   const calls: CallTelemetry[] = [];
 
   try {
-    const copy = await generateStructuredCopy(product.rawInput, {
+    const copy = await generateStructuredCopy(specs.text, {
       signal: options.signal,
       onCall: (call) => calls.push(call),
     });
 
+    const clean = sanitizeCopy(copy);
+
+    // The sanitised copy is what gets cached, so a stripped payload is not
+    // re-stripped on every hit and the stored value matches what was shown.
     await writeCache({
       key: cacheKey,
       task: TASK,
       model: MODELS.structured,
-      response: copy,
+      response: clean.copy,
     });
 
     await db.generation.update({
       where: { id: generation.id },
       data: {
         status: "COMPLETED",
-        seoTitle: copy.seoTitle,
-        metaDescription: copy.metaDescription,
-        benefits: copy.benefits,
+        seoTitle: clean.copy.seoTitle,
+        metaDescription: clean.copy.metaDescription,
+        benefits: clean.copy.benefits,
+        warnings: [...warnings, ...clean.removed],
         completedAt: new Date(),
       },
     });
@@ -124,6 +141,7 @@ export async function generateCopyForProduct(
         status: failure?.code === "aborted" ? "CANCELLED" : "FAILED",
         errorCode: failure?.code ?? "unknown",
         errorMessage: error instanceof Error ? error.message : String(error),
+        warnings,
         completedAt: new Date(),
       },
     });
@@ -143,4 +161,30 @@ export async function generateCopyForProduct(
     // on things that went wrong.
     await recordCalls(generation.id, calls);
   }
+}
+
+/**
+ * Every field the model produced goes through the output filter. Length limits
+ * already came from Zod; this removes the payloads an injection would want to
+ * place in published copy.
+ */
+function sanitizeCopy(copy: StructuredCopy): { copy: StructuredCopy; removed: string[] } {
+  const title = sanitizeCopyText(copy.seoTitle);
+  const meta = sanitizeCopyText(copy.metaDescription);
+  const benefits = copy.benefits.map((benefit) => sanitizeCopyText(benefit));
+
+  return {
+    copy: {
+      seoTitle: title.text,
+      metaDescription: meta.text,
+      benefits: benefits.map((benefit) => benefit.text),
+    },
+    removed: [
+      ...new Set([
+        ...title.removed,
+        ...meta.removed,
+        ...benefits.flatMap((benefit) => benefit.removed),
+      ]),
+    ].map((label) => `output:${label}`),
+  };
 }

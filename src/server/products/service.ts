@@ -44,6 +44,7 @@ export async function getProduct(id: string) {
           benefits: true,
           description: true,
           descriptionPartial: true,
+          warnings: true,
           errorCode: true,
           errorMessage: true,
           createdAt: true,
