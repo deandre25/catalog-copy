@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { DescriptionStream } from "@/components/description-stream";
 import { GenerateButton } from "@/components/generate-button";
 import { getProduct } from "@/server/products/service";
 
@@ -34,7 +35,7 @@ async function ProductDetail({ params }: { params: Params }) {
 
       <GenerateButton productId={product.id} />
 
-      {latest ? <GenerationCard generation={latest} /> : null}
+      {latest ? <GenerationCard generation={latest} interactive /> : null}
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Raw specs</h2>
@@ -59,7 +60,15 @@ async function ProductDetail({ params }: { params: Params }) {
 
 type Generation = NonNullable<Awaited<ReturnType<typeof getProduct>>>["generations"][number];
 
-function GenerationCard({ generation }: { generation: Generation }) {
+function GenerationCard({
+  generation,
+  interactive = false,
+}: {
+  generation: Generation;
+  interactive?: boolean;
+}) {
+  // CANCELLED is not an error state here: the title and benefits succeeded and
+  // only the description was interrupted, so the content is still shown.
   const isFailed = generation.status === "FAILED";
 
   return (
@@ -100,6 +109,23 @@ function GenerationCard({ generation }: { generation: Generation }) {
               ))}
             </ul>
           </div>
+
+          {interactive ? (
+            <DescriptionStream
+              generationId={generation.id}
+              initialDescription={generation.description}
+              initialPartial={generation.descriptionPartial}
+            />
+          ) : generation.description ? (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-zinc-500 uppercase">
+                Description{generation.descriptionPartial ? " · incomplete" : ""}
+              </p>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                {generation.description}
+              </p>
+            </div>
+          ) : null}
         </div>
       )}
     </article>

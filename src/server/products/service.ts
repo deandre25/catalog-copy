@@ -42,6 +42,8 @@ export async function getProduct(id: string) {
           seoTitle: true,
           metaDescription: true,
           benefits: true,
+          description: true,
+          descriptionPartial: true,
           errorCode: true,
           errorMessage: true,
           createdAt: true,
