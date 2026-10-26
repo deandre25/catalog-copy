@@ -12,7 +12,11 @@ retries that know which errors not to retry, a response cache, a cost ledger,
 prompt-injection defences, and retrieval over pgvector — each one is
 implemented, and each one is explained below including where it falls short.
 
-**Live demo:** _not deployed yet — see [Status](#status) for measured costs from the live run._
+**Live demo:** **https://catalog-copy-six.vercel.app**
+
+> The embeddings account is on a free tier without a payment method, which caps
+> it at **3 requests per minute**. Search more than three times in a minute and
+> the page says so rather than hanging — that path is deliberate, see below.
 
 ## Architecture
 
@@ -358,4 +362,22 @@ Behaviour, not just cost:
   count on an abort is a floor rather than an exact figure, and that is
   documented where it is recorded.
 
-Outstanding: **not deployed**, and no screenshots in this README yet.
+Deployed to Vercel with the database on Neon, where `migrate deploy` created
+the pgvector extension and the HNSW index unattended.
+
+Production found three more bugs that local development could not:
+
+- **The search page hung on "Searching…" for about half of all requests.**
+  Prisma's I/O is invisible to Next, so the Suspense boundary stayed in
+  prerender mode and the first clock read inside the retry loop threw as an
+  unstable value. Fixed with `await connection()` at the top of the boundary
+  and a monotonic timer for latency.
+- **A provider error inside a streamed boundary had no way to report itself.**
+  Once the shell is flushed there is no status code left to send, so the
+  stream simply ended and the fallback stayed on screen forever. The boundary
+  now catches `LlmError` and renders the reason.
+- **`Number(null)` is `0`**, so a provider that sends no `retry-after` — Voyage
+  documents none — was read as "retry immediately", collapsing the backoff
+  curve and burning all three attempts inside one second.
+
+Outstanding: no screenshots in this README yet.
