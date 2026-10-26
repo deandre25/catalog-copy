@@ -9,6 +9,7 @@ const envSchema = z.object({
     .refine((value) => value.startsWith("postgres://") || value.startsWith("postgresql://"), {
       message: "must be a postgres:// or postgresql:// connection string",
     }),
+  ANTHROPIC_API_KEY: z.string().min(1, "required — the app cannot generate anything without it"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 
