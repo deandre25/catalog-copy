@@ -10,6 +10,9 @@ const envSchema = z.object({
       message: "must be a postgres:// or postgresql:// connection string",
     }),
   ANTHROPIC_API_KEY: z.string().min(1, "required — the app cannot generate anything without it"),
+  // Required rather than optional: an app that boots and then fails only on
+  // the search page is harder to diagnose than one that refuses to start.
+  VOYAGE_API_KEY: z.string().min(1, "required — embeddings are a separate provider"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

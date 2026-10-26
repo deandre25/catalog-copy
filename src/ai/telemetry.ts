@@ -7,7 +7,9 @@ import type { ModelId } from "./models";
  * pricing and persistence happen later.
  */
 export type CallTelemetry = {
-  task: "structured" | "description" | "embedding";
+  // Indexing and searching are separated: they run at different frequencies
+  // and the stats page is the place where "search is cheap" has to be provable.
+  task: "structured" | "description" | "embedding" | "embedding-query";
   model: ModelId;
   promptVersion: string;
   attempt: number;

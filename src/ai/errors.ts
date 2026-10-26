@@ -51,7 +51,7 @@ export class LlmError extends Error {
  * 401 or a 402 across many concurrent generations turns a configuration
  * mistake into a burst of traffic against an endpoint that is already saying no.
  */
-const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+export const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 
 export function classifyError(error: unknown): LlmError {
   if (error instanceof LlmError) return error;
