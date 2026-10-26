@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { HitList } from "@/components/hit-list";
@@ -48,6 +49,14 @@ export default function SearchPage({ searchParams }: PageProps<"/search">) {
 }
 
 async function Results({ searchParams }: { searchParams: PageProps<"/search">["searchParams"] }) {
+  // Marks the boundary as request-time before anything inside it reads a
+  // clock. Next cannot see that Prisma did I/O — the driver is not
+  // instrumented the way fetch is — so without this the render stays a
+  // prerender, the Date.now() inside withRetry throws as an unstable value,
+  // and the boundary never resumes: production served a page stuck on
+  // "Searching…" for roughly half of all queries.
+  await connection();
+
   const params = await searchParams;
   const raw = typeof params.q === "string" ? params.q : "";
 
