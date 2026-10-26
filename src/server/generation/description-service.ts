@@ -6,10 +6,26 @@ import { streamDescription } from "@/ai/stream-description";
 import type { CallTelemetry } from "@/ai/telemetry";
 import { db } from "@/server/db";
 
+import { indexGeneration } from "@/server/search/index-service";
+
 import { readCache, writeCache } from "./cache";
 import { recordCacheHit, recordCalls } from "./ledger";
 
 const TASK = "description";
+
+/**
+ * Indexing is a side effect of finishing a description, not a step of it: a
+ * failure here must not turn a description the user is already reading into a
+ * failed generation. The cost of the call is in the ledger either way, and the
+ * reindex endpoint exists to pick up whatever this missed.
+ */
+async function index(generationId: string): Promise<void> {
+  try {
+    await indexGeneration(generationId);
+  } catch {
+    /* already recorded in the ledger with its error code */
+  }
+}
 
 /**
  * Partial text is written to the database as it arrives, not only at the end.
@@ -103,6 +119,11 @@ export async function* writeDescription(
         promptVersion: DESCRIPTION_PROMPT_VERSION,
         latencyMs: Date.now() - cacheStartedAt,
       });
+
+      // A cached description is still a completed description, so it is
+      // indexed too — indexGeneration skips it for free if the text is
+      // byte-identical to what is already in the table.
+      await index(generationId);
 
       // Delivered as one delta rather than chunked with artificial pauses. A
       // fake typing animation over text that is already in hand spends the
@@ -201,6 +222,11 @@ export async function* writeDescription(
             completedAt: new Date(),
           },
         });
+
+        // Indexed before the terminal event is yielded, not after: once the
+        // consumer has its "done" it may never ask this generator for another
+        // value, so anything after the yield is not guaranteed to run.
+        await index(generationId);
 
         yield { type: "done" };
         return;
