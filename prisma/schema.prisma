@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GenerationStatus {
+  PENDING
+  STREAMING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum LlmCallStatus {
+  SUCCESS
+  RETRIED
+  FAILED
+}
+
+/// A catalog entry: the raw specs a content editor pasted in.
+model Product {
+  id        String   @id @default(cuid())
+  title     String
+  rawInput  String   @db.Text
+  /// sha256 of the normalized rawInput. Not unique — deduplication is the
+  /// cache's job, an editor may legitimately enter two near-identical products.
+  inputHash String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  generations Generation[]
+
+  @@index([inputHash])
+  @@index([createdAt(sort: Desc)])
+}
+
+/// One attempt at generating copy for a product. Kept as history rather than
+/// overwritten, so a prompt change can be compared against earlier output.
+model Generation {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  status GenerationStatus @default(PENDING)
+
+  seoTitle        String?
+  metaDescription String?
+  benefits        String[]
+
+  description String? @db.Text
+  /// True when `description` holds text that arrived before the stream was
+  /// cancelled or broke. The user already saw it, so it is kept, but it must
+  /// never be published or embedded as if it were complete.
+  descriptionPartial Boolean @default(false)
+
+  errorCode    String?
+  errorMessage String? @db.Text
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  calls LlmCall[]
+
+  @@index([productId, createdAt(sort: Desc)])
+  @@index([status])
+}
+
+/// Append-only ledger: one row per HTTP request to a model provider, including
+/// failed attempts, retries and cache hits. Cost reporting is a GROUP BY over
+/// this table; nothing stores pre-aggregated totals.
+model LlmCall {
+  id           String      @id @default(cuid())
+  generationId String?
+  generation   Generation? @relation(fields: [generationId], references: [id], onDelete: SetNull)
+
+  /// "structured" | "description" | "embedding"
+  task          String
+  /// Exact provider model id, e.g. claude-haiku-5-5.
+  model         String
+  promptVersion String
+  status        LlmCallStatus
+  attempt       Int           @default(1)
+  /// A cache hit still gets a row (with zero cost) so the stats page can show
+  /// how much the cache saved.
+  cacheHit      Boolean       @default(false)
+
+  inputTokens      Int @default(0)
+  outputTokens     Int @default(0)
+  cacheReadTokens  Int @default(0)
+  cacheWriteTokens Int @default(0)
+
+  /// Integer micro-dollars (1 = $0.000001). Avoids float drift on SUM and
+  /// avoids leaking Decimal objects through the whole codebase.
+  costMicroUsd Int @default(0)
+  latencyMs    Int
+
+  errorCode String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([model, createdAt(sort: Desc)])
+  @@index([generationId])
+}
+
+/// Response cache keyed by the inputs that can change the output. The prompt
+/// version is part of the key, so editing a prompt invalidates it implicitly.
+model LlmCache {
+  /// sha256(task | model | promptVersion | normalizedInput)
+  key       String   @id
+  task      String
+  model     String
+  response  Json
+  hitCount  Int      @default(0)
+  createdAt DateTime @default(now())
+  lastHitAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+}
