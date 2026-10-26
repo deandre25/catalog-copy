@@ -45,6 +45,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           </div>
         </header>
         <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">{children}</main>
+        {/* Anyone who opens the demo from a CV is looking for the code next. */}
+        <footer className="border-t border-zinc-200 dark:border-zinc-800">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-6 py-4 text-xs text-zinc-500">
+            <span>Streaming, structured output, retries, caching, cost accounting, injection defence, RAG.</span>
+            <a
+              href="https://github.com/deandre25/catalog-copy"
+              className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Source on GitHub
+            </a>
+          </div>
+        </footer>
       </body>
     </html>
   );
