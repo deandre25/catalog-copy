@@ -60,6 +60,10 @@ model Generation {
   errorCode    String?
   errorMessage String? @db.Text
 
+  /// Injection signals found in the input, plus the kinds of payload stripped
+  /// from the output. Surfaced to a reviewer; never used to block a generation.
+  warnings String[]
+
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
