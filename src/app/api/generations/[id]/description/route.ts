@@ -7,6 +7,8 @@ export async function POST(
   { params }: RouteContext<"/api/generations/[id]/description">,
 ) {
   const { id } = await params;
+  // Set by the Rewrite button to bypass the cache for this one request.
+  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
   const encoder = new TextEncoder();
 
   const body = new ReadableStream<Uint8Array>({
@@ -19,7 +21,7 @@ export async function POST(
       };
 
       try {
-        for await (const progress of writeDescription(id, { signal: request.signal })) {
+        for await (const progress of writeDescription(id, { signal: request.signal, fresh })) {
           if (progress.type === "delta") {
             send("delta", { text: progress.text });
           } else if (progress.type === "done") {

@@ -24,7 +24,7 @@ export function DescriptionStream({
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  async function start() {
+  async function start({ fresh }: { fresh: boolean }) {
     const controller = new AbortController();
     abortRef.current = controller;
     setText("");
@@ -32,10 +32,10 @@ export function DescriptionStream({
     setStatus("streaming");
 
     try {
-      const response = await fetch(`/api/generations/${generationId}/description`, {
-        method: "POST",
-        signal: controller.signal,
-      });
+      const response = await fetch(
+        `/api/generations/${generationId}/description${fresh ? "?fresh=1" : ""}`,
+        { method: "POST", signal: controller.signal },
+      );
 
       if (!response.body) throw new Error("No response body");
 
@@ -107,7 +107,7 @@ export function DescriptionStream({
         ) : (
           <button
             type="button"
-            onClick={start}
+            onClick={() => start({ fresh: text.length > 0 })}
             className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium dark:border-zinc-700"
           >
             {text ? "Rewrite" : "Write description"}
