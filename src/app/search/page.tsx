@@ -3,6 +3,7 @@ import { Suspense } from "react";
 
 import { HitList } from "@/components/hit-list";
 
+import { LlmError } from "@/ai/errors";
 import { indexedCount, searchByText, searchQuerySchema } from "@/server/search/service";
 
 /**
@@ -80,7 +81,27 @@ async function Results({ searchParams }: { searchParams: PageProps<"/search">["s
     );
   }
 
-  const { hits, cached } = await searchByText(parsed.data);
+  let result;
+
+  try {
+    result = await searchByText(parsed.data);
+  } catch (error) {
+    // Without this the boundary throws, the stream ends after the fallback,
+    // and the page sits on "Searching…" forever — there is no status code
+    // left to send once the shell has been flushed. Found in production when
+    // the embeddings provider started returning 429.
+    if (error instanceof LlmError) {
+      return (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {SEARCH_FAILURES[error.code] ?? "The search could not be completed."}
+        </p>
+      );
+    }
+
+    throw error;
+  }
+
+  const { hits, cached } = result;
 
   if (hits.length === 0) {
     return (
@@ -107,3 +128,12 @@ async function Results({ searchParams }: { searchParams: PageProps<"/search">["s
     </div>
   );
 }
+
+const SEARCH_FAILURES: Record<string, string> = {
+  rate_limited: "Rate limited by the embeddings provider. Try again in a moment.",
+  overloaded: "The embeddings provider is overloaded. Try again in a moment.",
+  timeout: "The embeddings provider took too long to respond.",
+  network_error: "Could not reach the embeddings provider.",
+  api_error: "The embeddings provider rejected the request.",
+  invalid_output: "The embeddings provider returned an unexpected response.",
+};
