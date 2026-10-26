@@ -15,6 +15,7 @@ export const metadata: Metadata = {
 const navigation = [
   { href: "/", label: "New" },
   { href: "/products", label: "Catalog" },
+  { href: "/stats", label: "Usage" },
 ];
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
