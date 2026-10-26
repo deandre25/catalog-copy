@@ -69,7 +69,7 @@ export async function withRetry<T>(
       const latencyMs = Date.now() - attemptStartedAt;
       const lastAttempt = attempt >= policy.maxAttempts;
       const delayMs =
-        failure.retryable && !lastAttempt ? nextDelayMs(attempt, policy, failure.retryAfterSeconds) : null;
+        failure.retryable && !lastAttempt ? computeBackoffMs(attempt, policy, failure.retryAfterSeconds) : null;
       const budgetLeftMs = policy.totalBudgetMs - (Date.now() - startedAt);
 
       // Waiting longer than the budget allows would mean sleeping until the
@@ -97,7 +97,7 @@ export async function withRetry<T>(
  * the whole interval, which is what makes the second wave thinner than the
  * first.
  */
-function nextDelayMs(attempt: number, policy: RetryPolicy, retryAfterSeconds: number | null): number {
+export function computeBackoffMs(attempt: number, policy: RetryPolicy, retryAfterSeconds: number | null): number {
   if (retryAfterSeconds !== null) {
     // Jitter is still added on top, so a fleet told "wait 2s" does not return
     // in lockstep at 2.000s.
@@ -108,7 +108,7 @@ function nextDelayMs(attempt: number, policy: RetryPolicy, retryAfterSeconds: nu
   return Math.random() * ceiling;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
     return Promise.reject(new LlmError("aborted", "Aborted before retrying", false));
   }
