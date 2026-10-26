@@ -150,12 +150,28 @@ export async function indexGeneration(
 }
 
 /**
- * Backfill for products whose copy predates the index, or whose indexed text
- * is stale. Runs the generations one at a time rather than embedding them in a
- * single batched request: the batch would be cheaper, but a backfill is rare
- * and sequential rows keep one bad row from failing the whole pass.
+ * Batch size for a bulk pass.
+ *
+ * Voyage accepts up to 1,000 texts and 1M tokens in one request, so 64 entries
+ * of ~400 tokens is nowhere near either ceiling. The limit that actually binds
+ * is the account's requests-per-minute: embedding 50 products one at a time is
+ * 50 requests against a quota measured in requests, and on a free tier that is
+ * 50 rate-limit errors. Batched, the same work is one request.
  */
-export async function reindexCatalog({ limit = 50 }: { limit?: number } = {}): Promise<{
+const BATCH_SIZE = 64;
+
+type Pending = {
+  productId: string;
+  generationId: string;
+  content: string;
+  sourceHash: string;
+};
+
+/**
+ * Backfill for products whose copy predates the index, or whose indexed text
+ * is stale. Everything that needs embedding goes out in batched requests.
+ */
+export async function reindexCatalog({ limit = 200 }: { limit?: number } = {}): Promise<{
   indexed: number;
   unchanged: number;
   skipped: number;
@@ -165,36 +181,102 @@ export async function reindexCatalog({ limit = 50 }: { limit?: number } = {}): P
     orderBy: { createdAt: "desc" },
     take: limit,
     select: {
+      id: true,
+      title: true,
+      embedding: { select: { sourceHash: true } },
       generations: {
         where: { status: "COMPLETED", descriptionPartial: false },
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { id: true },
+        select: { id: true, seoTitle: true, benefits: true, description: true },
       },
     },
   });
 
   const summary = { indexed: 0, unchanged: 0, skipped: 0, failed: 0 };
+  const pending: Pending[] = [];
 
   for (const product of products) {
-    const generationId = product.generations[0]?.id;
+    const generation = product.generations[0];
 
-    if (!generationId) {
+    if (!generation?.seoTitle || !generation.description) {
       summary.skipped += 1;
       continue;
     }
 
+    const content = composeEmbeddingInput({
+      title: product.title,
+      seoTitle: generation.seoTitle,
+      benefits: generation.benefits,
+      description: generation.description,
+    });
+
+    const sourceHash = sha256([EMBEDDING_INPUT_VERSION, MODELS.embedding, normalizeInput(content)]);
+
+    if (product.embedding?.sourceHash === sourceHash) {
+      summary.unchanged += 1;
+      continue;
+    }
+
+    pending.push({ productId: product.id, generationId: generation.id, content, sourceHash });
+  }
+
+  for (let start = 0; start < pending.length; start += BATCH_SIZE) {
+    const batch = pending.slice(start, start + BATCH_SIZE);
+    const calls: CallTelemetry[] = [];
+
     try {
-      const outcome = await indexGeneration(generationId);
-      if (outcome.status === "indexed") summary.indexed += 1;
-      else if (outcome.status === "unchanged") summary.unchanged += 1;
-      else summary.skipped += 1;
+      const { vectors, tokens } = await embed(
+        batch.map((entry) => entry.content),
+        { inputType: "document", onCall: (call) => calls.push(call) },
+      );
+
+      // One request produced one token count for the whole batch, so the
+      // per-row figure is the share each text contributed by length. The
+      // ledger row below carries the real total; this is only for the
+      // per-product column.
+      const totalChars = batch.reduce((sum, entry) => sum + entry.content.length, 0);
+
+      for (const [index, entry] of batch.entries()) {
+        const vector = vectors[index];
+        if (!vector) {
+          summary.failed += 1;
+          continue;
+        }
+
+        await writeEmbedding(entry, vector, Math.round((tokens * entry.content.length) / totalChars));
+        summary.indexed += 1;
+      }
     } catch {
-      // The error is already in the ledger with its code; a backfill that
-      // stops on the first failure leaves the rest of the catalog unsearchable.
-      summary.failed += 1;
+      // The error is already in the ledger with its code. One bad batch must
+      // not stop the rest of the catalog from being indexed.
+      summary.failed += batch.length;
+    } finally {
+      // generationId is null: a batched request covers many generations, and
+      // attributing its cost to one of them would be a lie the stats page
+      // would repeat.
+      await recordCalls(null, calls);
     }
   }
 
   return summary;
+}
+
+async function writeEmbedding(entry: Pending, vector: number[], tokens: number): Promise<void> {
+  await db.$executeRaw`
+    INSERT INTO "ProductEmbedding"
+      ("productId", "generationId", "model", "sourceHash", "content", "tokens", "embedding", "updatedAt")
+    VALUES (
+      ${entry.productId}, ${entry.generationId}, ${MODELS.embedding}, ${entry.sourceHash},
+      ${entry.content}, ${tokens}, ${toVectorLiteral(vector)}::vector, now()
+    )
+    ON CONFLICT ("productId") DO UPDATE SET
+      "generationId" = EXCLUDED."generationId",
+      "model"        = EXCLUDED."model",
+      "sourceHash"   = EXCLUDED."sourceHash",
+      "content"      = EXCLUDED."content",
+      "tokens"       = EXCLUDED."tokens",
+      "embedding"    = EXCLUDED."embedding",
+      "updatedAt"    = now()
+  `;
 }

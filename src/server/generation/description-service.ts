@@ -47,7 +47,14 @@ export type DescriptionProgress =
 
 export async function* writeDescription(
   generationId: string,
-  { signal, fresh = false }: { signal?: AbortSignal; fresh?: boolean } = {},
+  {
+    signal,
+    fresh = false,
+    // A bulk import defers indexing to the batched pass: one request for fifty
+    // products instead of fifty requests, which is the difference between
+    // staying inside a per-minute quota and spending it all on retries.
+    deferIndexing = false,
+  }: { signal?: AbortSignal; fresh?: boolean; deferIndexing?: boolean } = {},
 ): AsyncGenerator<DescriptionProgress> {
   const generation = await db.generation.findUnique({
     where: { id: generationId },
@@ -123,7 +130,7 @@ export async function* writeDescription(
       // A cached description is still a completed description, so it is
       // indexed too — indexGeneration skips it for free if the text is
       // byte-identical to what is already in the table.
-      await index(generationId);
+      if (!deferIndexing) await index(generationId);
 
       // Delivered as one delta rather than chunked with artificial pauses. A
       // fake typing animation over text that is already in hand spends the
@@ -226,7 +233,7 @@ export async function* writeDescription(
         // Indexed before the terminal event is yielded, not after: once the
         // consumer has its "done" it may never ask this generator for another
         // value, so anything after the yield is not guaranteed to run.
-        await index(generationId);
+        if (!deferIndexing) await index(generationId);
 
         yield { type: "done" };
         return;
