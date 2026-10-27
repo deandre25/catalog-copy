@@ -151,26 +151,43 @@ export async function indexGeneration(
 }
 
 /**
+ * The provider's quota, not a tuning knob: these two numbers are what Voyage
+ * grants an account with no payment method on file. Adding one raises both by
+ * roughly two orders of magnitude, and the only correct edit here is to copy
+ * the new figures from the account page.
+ *
+ * They are named because everything below is derived from them. Left as bare
+ * numbers in the two constants that use them, a tier change looks like a
+ * performance decision someone made by feel.
+ */
+const QUOTA_REQUESTS_PER_MINUTE = 3;
+const QUOTA_TOKENS_PER_MINUTE = 10_000;
+
+/**
  * A batch is bounded by tokens, not by item count.
  *
  * Voyage's hard ceiling is 1,000 texts and 1M tokens per request, so counting
  * items looks sufficient — and is not. The quota that binds a real account is
  * measured in tokens per minute, and the first version of this batched 37
  * products of ~400 tokens into one request, sailed past the item limit and hit
- * a 10,000 TPM wall. Batching only helps when it is batched along the axis the
+ * the TPM wall. Batching only helps when it is batched along the axis the
  * quota is measured on.
  *
- * Sized for the free tier. An account with standard limits can raise both of
- * these by two orders of magnitude.
+ * 70% of the window rather than all of it: estimateTokens is an approximation,
+ * and a batch that lands 20% over its estimate must still fit.
  */
-const BATCH_TOKEN_BUDGET = 7_000;
+const BATCH_TOKEN_BUDGET = Math.floor(QUOTA_TOKENS_PER_MINUTE * 0.7);
 
-/** Three requests per minute on the free tier, so one every 21 seconds. */
-const BATCH_PACING_MS = 21_000;
+/**
+ * One request per slice of the minute, plus a second of margin for clock skew
+ * between us and the provider's window.
+ */
+const BATCH_PACING_MS = Math.ceil(60_000 / QUOTA_REQUESTS_PER_MINUTE) + 1_000;
 
 /**
  * A rate limit measured per minute cannot be retried inside a 20-second
  * budget: every attempt lands in the same window that rejected the first one.
+ * The budget below outlasts several of the provider's windows deliberately.
  * The retry budget has to outlast the provider's quota window or the retry is
  * decoration. This is the one place in the project that waits minutes, and it
  * is a background pass with nobody watching.
