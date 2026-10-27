@@ -148,11 +148,23 @@ serve the same broken result forever, for free.
 ### 5. Cost accounting
 
 One `LlmCall` row per HTTP request, append-only, including retries, repair
-turns, failures and cache hits. Money is stored as **integer micro-dollars**
-(1 = $0.000001) to avoid float drift on `SUM`, and the cost of a call is
-computed by summing both token terms before a single division — dividing per
-term first would round a 300-token Haiku call down to zero and the ledger would
-report free generations.
+turns, failures and cache hits. Money is an integer to keep `SUM` free of float
+drift, and both token terms are summed before a single division — dividing per
+term first would round a 300-token Haiku call to zero.
+
+The unit is **nano-dollars** (1 = $0.000000001), and it did not start that way.
+Micro-dollars were the first choice and they were wrong: an embedding query
+costs 0.2 of one, so every such row rounded to zero on write and the stats page
+reported a quarter of its traffic as free — with "11 cache hits" next to
+"$0.0000 saved". The lesson is the generalisable part: the unit has to fit the
+cheapest call in the system, not the most expensive one. Rescaling the existing
+rows was lossless, because the old values were exact at their own resolution.
+
+The ledger on the live demo holds real pipeline traffic only. Load-testing
+rows from building it — a few hundred search requests fired against a free
+tier capped at three per minute, to reproduce a bug — were deleted once the
+bug was fixed, because a cost page whose headline figure is the author's own
+stress test says nothing about the application.
 
 `/stats` is a `GROUP BY` over that table: spend in the last 24 hours, average
 cost per completed generation, failures by error code, spend per model, and a
@@ -248,6 +260,12 @@ back into the corpus. Re-embedding unchanged text is skipped on a source hash,
 query vectors go through the same response cache so a shared search URL costs
 one provider call, and "similar products" on a product page costs nothing at all
 — that product's vector is already in the table.
+
+A bulk reindex batches: Voyage accepts up to 1,000 texts per request, and the
+quota that actually binds is requests per minute, so indexing fifty products
+one at a time spends fifty requests where one would do. Interactive searches
+deliberately do **not** queue behind a rate limiter — a visitor should be told
+"rate limited, try again" rather than wait twenty seconds for a slot.
 
 ## Stack
 
@@ -379,5 +397,27 @@ Production found three more bugs that local development could not:
 - **`Number(null)` is `0`**, so a provider that sends no `retry-after` — Voyage
   documents none — was read as "retry immediately", collapsing the backoff
   curve and burning all three attempts inside one second.
+
+A review of the deployed app then found three more, all in the cost and
+quota layer:
+
+- **The ledger reported its cheapest traffic as free.** Integer micro-dollars
+  rounded every embedding query to zero, so "11 cache hits" sat next to
+  "$0.0000 saved". Rescaled to nano-dollars — the unit has to fit the cheapest
+  call in the system.
+- **Batching by item count hit the wrong ceiling.** Voyage allows 1,000 texts
+  per request, so 37 products in one batch looked safe, and ran straight into
+  the 10,000 tokens-per-minute quota. Batches are now bounded by estimated
+  tokens, because batching only helps along the axis the quota is measured on.
+- **A per-minute rate limit cannot be retried inside a 20-second budget.**
+  Every attempt lands in the window that rejected the first one. The bulk pass
+  now runs on a separate policy with a five-minute budget; interactive
+  searches keep the short one and tell the visitor to try again, because
+  waiting out a quota while someone watches a spinner is not a fix.
+
+The live catalog holds **40 products across eight categories**, generated
+through the same pipeline by `scripts/seed.ts` — 40 structured calls, 40
+streamed descriptions, 0 failures, **$0.271** in total, and 40 vectors indexed
+in three batched embedding requests.
 
 Outstanding: no screenshots in this README yet.
