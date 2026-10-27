@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { listProducts } from "@/server/products/service";
@@ -17,6 +18,14 @@ export default function ProductsPage() {
 }
 
 async function ProductList() {
+  // Prisma I/O is invisible to Next: it is not a fetch, so nothing here marks
+  // the render dynamic on its own. This boundary currently resolves at request
+  // time, but only as a side effect of the prerender giving up on it — and the
+  // search page proved what that costs, where a boundary that looked identical
+  // prerendered happily and served the same stale answer to everyone.
+  // connection() states the requirement instead of relying on it.
+  await connection();
+
   const products = await listProducts();
 
   if (products.length === 0) {
